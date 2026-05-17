@@ -12,10 +12,7 @@ pub struct TxFeeInfo {
 impl TxFeeInfo {
     pub fn new(tx: &Transaction, prevouts: &HashMap<u32, &TxOut>, network: Network) -> Self {
         let fee = get_tx_fee(tx, prevouts, network);
-        #[cfg(not(feature = "liquid"))]
         let vsize = tx.weight().to_wu() / 4;
-        #[cfg(feature = "liquid")]
-        let vsize = tx.weight() / 4;
 
         TxFeeInfo {
             fee,
@@ -25,7 +22,6 @@ impl TxFeeInfo {
     }
 }
 
-#[cfg(not(feature = "liquid"))]
 pub fn get_tx_fee(tx: &Transaction, prevouts: &HashMap<u32, &TxOut>, _network: Network) -> u64 {
     if tx.is_coinbase() {
         return 0;
@@ -37,11 +33,6 @@ pub fn get_tx_fee(tx: &Transaction, prevouts: &HashMap<u32, &TxOut>, _network: N
         .sum();
     let total_out: u64 = tx.output.iter().map(|vout| vout.value.to_sat()).sum();
     total_in - total_out
-}
-
-#[cfg(feature = "liquid")]
-pub fn get_tx_fee(tx: &Transaction, _prevouts: &HashMap<u32, &TxOut>, network: Network) -> u64 {
-    tx.fee_in(*network.native_asset())
 }
 
 pub fn make_fee_histogram(mut entries: Vec<&TxFeeInfo>) -> Vec<(f32, u32)> {

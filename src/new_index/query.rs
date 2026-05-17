@@ -11,12 +11,6 @@ use crate::errors::*;
 use crate::new_index::{ChainQuery, Mempool, ScriptStats, SpendingInput, Utxo};
 use crate::util::{is_spendable, BlockId, Bytes, TransactionStatus};
 
-#[cfg(feature = "liquid")]
-use crate::{
-    chain::{asset::AssetRegistryLock, AssetId},
-    elements::{lookup_asset, AssetRegistry, AssetSorting, LiquidAsset},
-};
-
 const FEE_ESTIMATES_TTL: u64 = 60; // seconds
 
 const CONF_TARGETS: [u16; 28] = [
@@ -31,12 +25,9 @@ pub struct Query {
     config: Arc<Config>,
     cached_estimates: RwLock<(HashMap<u16, f64>, Option<Instant>)>,
     cached_relayfee: RwLock<Option<f64>>,
-    #[cfg(feature = "liquid")]
-    asset_db: Option<Arc<RwLock<AssetRegistry>>>,
 }
 
 impl Query {
-    #[cfg(not(feature = "liquid"))]
     pub fn new(
         chain: Arc<ChainQuery>,
         mempool: Arc<RwLock<Mempool>>,
@@ -240,62 +231,5 @@ impl Query {
         let relayfee = self.daemon.get_relayfee()?;
         self.cached_relayfee.write().unwrap().replace(relayfee);
         Ok(relayfee)
-    }
-
-    #[cfg(feature = "liquid")]
-    pub fn new(
-        chain: Arc<ChainQuery>,
-        mempool: Arc<RwLock<Mempool>>,
-        daemon: Arc<Daemon>,
-        config: Arc<Config>,
-        asset_db: Option<Arc<RwLock<AssetRegistry>>>,
-    ) -> Self {
-        Query {
-            chain,
-            mempool,
-            daemon,
-            config,
-            asset_db,
-            cached_estimates: RwLock::new((HashMap::new(), None)),
-            cached_relayfee: RwLock::new(None),
-        }
-    }
-
-    #[cfg(feature = "liquid")]
-    pub fn lookup_asset(&self, asset_id: &AssetId) -> Result<Option<LiquidAsset>> {
-        lookup_asset(
-            self,
-            self.asset_db.as_ref().map(AssetRegistryLock::RwLock),
-            asset_id,
-            None,
-        )
-    }
-
-    #[cfg(feature = "liquid")]
-    pub fn list_registry_assets(
-        &self,
-        start_index: usize,
-        limit: usize,
-        sorting: AssetSorting,
-    ) -> Result<(usize, Vec<LiquidAsset>)> {
-        let asset_db = match &self.asset_db {
-            None => return Ok((0, vec![])),
-            Some(db) => db.read().unwrap(),
-        };
-        let (total_num, results) = asset_db.list(start_index, limit, sorting);
-        // Attach on-chain information alongside the registry metadata
-        let results = results
-            .into_iter()
-            .map(|(asset_id, metadata)| {
-                lookup_asset(
-                    self,
-                    Some(AssetRegistryLock::RwLockReadGuard(&asset_db)),
-                    asset_id,
-                    Some(metadata),
-                )?
-                .chain_err(|| "missing registered asset")
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Ok((total_num, results))
     }
 }

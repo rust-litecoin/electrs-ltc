@@ -535,9 +535,6 @@ mod tests {
     fn test() -> Result<()> {
         stderrlog::new().verbosity(4).init().unwrap();
 
-        #[cfg(feature = "liquid")]
-        let testnet = Network::LiquidTestnet;
-        #[cfg(not(feature = "liquid"))]
         let testnet = Network::Testnet;
 
         let features = ServerFeatures {

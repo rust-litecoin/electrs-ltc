@@ -11,9 +11,6 @@ use crate::chain::Network;
 use crate::daemon::CookieGetter;
 use crate::errors::*;
 
-#[cfg(feature = "liquid")]
-use bitcoin::Network as BNetwork;
-
 pub(crate) const APP_NAME: &str = "mempool-electrs";
 pub(crate) const ELECTRS_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub(crate) const GIT_HASH: Option<&str> = option_env!("GIT_HASH");
@@ -69,11 +66,6 @@ pub struct Config {
     pub electrum_max_subscriptions: usize,
     pub electrum_max_clients: usize,
     pub electrum_idle_timeout: u64,
-
-    #[cfg(feature = "liquid")]
-    pub parent_network: BNetwork,
-    #[cfg(feature = "liquid")]
-    pub asset_db_path: Option<PathBuf>,
 
     #[cfg(feature = "electrum-discovery")]
     pub electrum_public_hosts: Option<crate::electrum::ServerHosts>,
@@ -320,21 +312,6 @@ impl Config {
                     .takes_value(true),
             );
 
-        #[cfg(feature = "liquid")]
-        let args = args
-            .arg(
-                Arg::with_name("parent_network")
-                    .long("parent-network")
-                    .help("Select parent network type (mainnet, testnet, regtest)")
-                    .takes_value(true),
-            )
-            .arg(
-                Arg::with_name("asset_db_path")
-                    .long("asset-db-path")
-                    .help("Directory for liquid/elements asset db")
-                    .takes_value(true),
-            );
-
         #[cfg(feature = "electrum-discovery")]
         let args = args.arg(
                 Arg::with_name("electrum_public_hosts")
@@ -368,92 +345,33 @@ impl Config {
         let db_dir = Path::new(m.value_of("db_dir").unwrap_or("./db"));
         let db_path = db_dir.join(network_name);
 
-        #[cfg(feature = "liquid")]
-        let parent_network = m
-            .value_of("parent_network")
-            .map(|s| s.parse().expect("invalid parent network"))
-            .unwrap_or_else(|| match network_type {
-                Network::Liquid => BNetwork::Bitcoin,
-                // XXX liquid testnet/regtest don't have a parent chain
-                Network::LiquidTestnet | Network::LiquidRegtest => BNetwork::Regtest,
-            });
-
-        #[cfg(feature = "liquid")]
-        let asset_db_path = m.value_of("asset_db_path").map(PathBuf::from);
-
         let default_daemon_port = match network_type {
-            #[cfg(not(feature = "liquid"))]
             Network::Bitcoin => 8332,
-            #[cfg(not(feature = "liquid"))]
             Network::Testnet => 18332,
-            #[cfg(not(feature = "liquid"))]
             Network::Regtest => 18443,
-            #[cfg(not(feature = "liquid"))]
             Network::Signet => 38332,
-            #[cfg(not(feature = "liquid"))]
             Network::Testnet4 => 48332,
-
-            #[cfg(feature = "liquid")]
-            Network::Liquid => 7041,
-            #[cfg(feature = "liquid")]
-            Network::LiquidTestnet | Network::LiquidRegtest => 7040,
         };
         let default_electrum_port = match network_type {
-            #[cfg(not(feature = "liquid"))]
             Network::Bitcoin => 50001,
-            #[cfg(not(feature = "liquid"))]
             Network::Testnet => 60001,
-            #[cfg(not(feature = "liquid"))]
             Network::Testnet4 => 40001,
-            #[cfg(not(feature = "liquid"))]
             Network::Regtest => 60401,
-            #[cfg(not(feature = "liquid"))]
             Network::Signet => 60601,
-
-            #[cfg(feature = "liquid")]
-            Network::Liquid => 51000,
-            #[cfg(feature = "liquid")]
-            Network::LiquidTestnet => 51301,
-            #[cfg(feature = "liquid")]
-            Network::LiquidRegtest => 51401,
         };
         let default_http_port = match network_type {
-            #[cfg(not(feature = "liquid"))]
             Network::Bitcoin => 3000,
-            #[cfg(not(feature = "liquid"))]
             Network::Testnet => 3001,
-            #[cfg(not(feature = "liquid"))]
             Network::Regtest => 3002,
-            #[cfg(not(feature = "liquid"))]
             Network::Signet => 3003,
-            #[cfg(not(feature = "liquid"))]
             Network::Testnet4 => 3004,
-
-            #[cfg(feature = "liquid")]
-            Network::Liquid => 3000,
-            #[cfg(feature = "liquid")]
-            Network::LiquidTestnet => 3001,
-            #[cfg(feature = "liquid")]
-            Network::LiquidRegtest => 3002,
         };
         let default_monitoring_port = match network_type {
-            #[cfg(not(feature = "liquid"))]
             Network::Bitcoin => 4224,
-            #[cfg(not(feature = "liquid"))]
             Network::Testnet => 14224,
-            #[cfg(not(feature = "liquid"))]
             Network::Regtest => 24224,
-            #[cfg(not(feature = "liquid"))]
             Network::Testnet4 => 44224,
-            #[cfg(not(feature = "liquid"))]
             Network::Signet => 54224,
-
-            #[cfg(feature = "liquid")]
-            Network::Liquid => 34224,
-            #[cfg(feature = "liquid")]
-            Network::LiquidTestnet => 44324,
-            #[cfg(feature = "liquid")]
-            Network::LiquidRegtest => 44224,
         };
 
         let daemon_rpc_addr: SocketAddr = str_to_socketaddr(
@@ -489,23 +407,11 @@ impl Config {
                 default_dir
             });
         match network_type {
-            #[cfg(not(feature = "liquid"))]
             Network::Bitcoin => (),
-            #[cfg(not(feature = "liquid"))]
             Network::Testnet => daemon_dir.push("testnet3"),
-            #[cfg(not(feature = "liquid"))]
             Network::Testnet4 => daemon_dir.push("testnet4"),
-            #[cfg(not(feature = "liquid"))]
             Network::Regtest => daemon_dir.push("regtest"),
-            #[cfg(not(feature = "liquid"))]
             Network::Signet => daemon_dir.push("signet"),
-
-            #[cfg(feature = "liquid")]
-            Network::Liquid => daemon_dir.push("liquidv1"),
-            #[cfg(feature = "liquid")]
-            Network::LiquidTestnet => daemon_dir.push("liquidtestnet"),
-            #[cfg(feature = "liquid")]
-            Network::LiquidRegtest => daemon_dir.push("liquidregtest"),
         }
         let blocks_dir = m
             .value_of("blocks_dir")
@@ -598,11 +504,6 @@ impl Config {
                     .exit(),
                 },
             ),
-
-            #[cfg(feature = "liquid")]
-            parent_network,
-            #[cfg(feature = "liquid")]
-            asset_db_path,
 
             #[cfg(feature = "electrum-discovery")]
             electrum_public_hosts,

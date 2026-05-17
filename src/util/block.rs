@@ -311,10 +311,7 @@ pub struct BlockHeaderMeta {
 
 impl From<&BlockEntry> for BlockMeta {
     fn from(b: &BlockEntry) -> BlockMeta {
-        #[cfg(not(feature = "liquid"))]
         let weight = b.block.weight().to_wu() as u32;
-        #[cfg(feature = "liquid")]
-        let weight = b.block.weight() as u32;
         BlockMeta {
             tx_count: b.block.txdata.len() as u32,
             weight,

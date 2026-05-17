@@ -13,10 +13,7 @@ use hex;
 use itertools::Itertools;
 use serde_json::{from_str, from_value, Value};
 
-#[cfg(not(feature = "liquid"))]
 use bitcoin::consensus::encode::{deserialize, serialize};
-#[cfg(feature = "liquid")]
-use elements::encode::{deserialize, serialize};
 
 use crate::chain::{Block, BlockHash, BlockHeader, Network, Transaction, Txid};
 use crate::config::BITCOIND_SUBVER;

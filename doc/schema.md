@@ -54,22 +54,6 @@ Each spending input (except the coinbase) results in the following new rows (`S`
 
  * `"S{funding-txid:vout}{spending-txid:vin}" → ""`
 
-#### Elements only
-
-Assets (re)issuances results in the following new rows (only for user-issued assets):
-
- * `"i{asset-id}" → "{issuing-txid:vin}{prev-txid:vout}{issuance}{reissuance_token}"`
- * `"I{asset-id}{issuance-height}I{issuing-txid:vin}{is_reissuance}{amount}{tokens}" → ""`
-
-Peg-ins/peg-outs results in the following new rows (only for the native asset, typically L-BTC):
-
- * `"I{asset-id}{pegin-height}F{pegin-txid:vin}{value}" → ""`
- * `"I{asset-id}{pegout-height}F{pegout-txid:vout}{value}" → ""`
-
-Every burn (unspendable output) results in the following new row (both user-issued and native):
-
- * `"I{asset-id}{burn-height}F{burning-txid:vout}{value}" → ""`
-
 ### `cache`
 
 Holds a cache for aggregated stats and unspent TXOs of scripthashes.
@@ -83,11 +67,3 @@ If the `blockhash` was since orphaned, the cache is removed and re-computed.
  * `"A{scripthash}" → "{stats}{blockhash}"` (where `stats` is composed of `tx_count`, `funded_txo_{count,sum}` and `spent_txo_{count,sum}`)
 
  * `"U{scripthash}" → "{utxo}{blockhash}"` (where `utxo` is a set of `(txid,vout)` outpoints)
-
-#### Elements only:
-
-Stats for issued assets:
- * `"z{asset-id}" → "{issued_stats}{blockhash}"` (where `issued_stats` is composed of `tx_count`, `issuance_count`, `issued_amount`, `burned_amount`, `has_blinded_issuances`, `reissuance_tokens`, `burned_reissuance_tokens`)
-
-Stats for the native asset:
- * `"z{issued-asset}" → "{native_stats}{blockhash}"` (where `native_stats` is composed of `tx_count`, `peg_in_count`, `peg_in_amount`, `peg_out_count`, `peg_out_amount`, `burn_count` and `burn_amount`)

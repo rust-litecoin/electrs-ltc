@@ -4,18 +4,6 @@ use crate::util::{BlockId, IsProvablyUnspendable};
 
 use std::collections::HashMap;
 
-#[cfg(feature = "liquid")]
-lazy_static! {
-    static ref REGTEST_INITIAL_ISSUANCE_PREVOUT: Txid =
-        "50cdc410c9d0d61eeacc531f52d2c70af741da33af127c364e52ac1ee7c030a5"
-            .parse()
-            .unwrap();
-    static ref TESTNET_INITIAL_ISSUANCE_PREVOUT: Txid =
-        "0c52d2526a5c9f00e9fb74afd15dd3caaf17c823159a514f929ae25193a43a52"
-            .parse()
-            .unwrap();
-}
-
 #[derive(Serialize, Deserialize)]
 pub struct TransactionStatus {
     pub confirmed: bool,
@@ -53,27 +41,15 @@ pub struct TxInput {
 }
 
 pub fn is_coinbase(txin: &TxIn) -> bool {
-    #[cfg(not(feature = "liquid"))]
-    return txin.previous_output.is_null();
-    #[cfg(feature = "liquid")]
-    return txin.is_coinbase();
+    txin.previous_output.is_null()
 }
 
 pub fn has_prevout(txin: &TxIn) -> bool {
-    #[cfg(not(feature = "liquid"))]
-    return !txin.previous_output.is_null();
-    #[cfg(feature = "liquid")]
-    return !txin.is_coinbase()
-        && !txin.is_pegin
-        && txin.previous_output.txid != *REGTEST_INITIAL_ISSUANCE_PREVOUT
-        && txin.previous_output.txid != *TESTNET_INITIAL_ISSUANCE_PREVOUT;
+    !txin.previous_output.is_null()
 }
 
 pub fn is_spendable(txout: &TxOut) -> bool {
-    #[cfg(not(feature = "liquid"))]
-    return !txout.script_pubkey.is_provably_unspendable_();
-    #[cfg(feature = "liquid")]
-    return !txout.is_fee() && !txout.script_pubkey.is_provably_unspendable_();
+    !txout.script_pubkey.is_provably_unspendable_()
 }
 
 /// Extract the previous TxOuts of a Transaction's TxIns
@@ -122,10 +98,7 @@ pub(super) mod sigops {
         script::{self, Instruction},
         Transaction, TxOut, Witness,
     };
-    #[cfg(not(feature = "liquid"))]
     use bitcoin::opcodes::Opcode;
-    #[cfg(feature = "liquid")]
-    use elements::opcodes::All as Opcode;
     use std::collections::HashMap;
 
     /// Get sigop count for transaction. prevout_map must have all the prevouts.
@@ -136,10 +109,7 @@ pub(super) mod sigops {
         let input_count = tx.input.len();
         let mut prevouts = Vec::with_capacity(input_count);
 
-        #[cfg(not(feature = "liquid"))]
         let is_coinbase_or_pegin = tx.is_coinbase();
-        #[cfg(feature = "liquid")]
-        let is_coinbase_or_pegin = tx.is_coinbase() || tx.input.iter().any(|input| input.is_pegin);
 
         if !is_coinbase_or_pegin {
             for idx in 0..input_count {
@@ -158,10 +128,7 @@ pub(super) mod sigops {
     fn decode_pushnum(op: &Opcode) -> Option<u8> {
         // 81 = OP_1, 96 = OP_16
         // 81 -> 1, so... 81 - 80 -> 1
-        #[cfg(not(feature = "liquid"))]
         let self_u8 = op.to_u8();
-        #[cfg(feature = "liquid")]
-        let self_u8 = op.into_u8();
         match self_u8 {
             81..=96 => Some(self_u8 - 80),
             _ => None,
@@ -219,11 +186,6 @@ pub(super) mod sigops {
     }
 
     fn get_p2sh_sigop_count(tx: &Transaction, previous_outputs: &[&TxOut]) -> usize {
-        #[cfg(not(feature = "liquid"))]
-        if tx.is_coinbase() {
-            return 0;
-        }
-        #[cfg(feature = "liquid")]
         if tx.is_coinbase() {
             return 0;
         }
@@ -233,10 +195,7 @@ pub(super) mod sigops {
                 if let Some(Ok(script::Instruction::PushBytes(redeem))) =
                     input.script_sig.instructions().last()
                 {
-                    #[cfg(not(feature = "liquid"))]
                     let script = script::Script::from_bytes(redeem.as_bytes());
-                    #[cfg(feature = "liquid")]
-                    let script = script::Script::from(redeem.to_vec());
                     #[allow(clippy::needless_borrow)]
                     {
                         n += count_sigops(&script, true);
@@ -265,10 +224,7 @@ pub(super) mod sigops {
         #[inline]
         fn last_pushdata(script: &script::Script) -> Option<&[u8]> {
             match script.instructions().last() {
-                #[cfg(not(feature = "liquid"))]
                 Some(Ok(Instruction::PushBytes(bytes))) => Some(bytes.as_bytes()),
-                #[cfg(feature = "liquid")]
-                Some(Ok(Instruction::PushBytes(bytes))) => Some(bytes),
                 _ => None,
             }
         }
@@ -288,33 +244,17 @@ pub(super) mod sigops {
                 && is_push_only(script_sig)
                 && !script_sig.is_empty()
             {
-                #[cfg(not(feature = "liquid"))]
-                {
-                    script_owned =
-                        script::ScriptBuf::from(last_pushdata(script_sig).unwrap().to_vec());
-                }
-                #[cfg(feature = "liquid")]
-                {
-                    script_owned =
-                        script::Script::from(last_pushdata(script_sig).unwrap().to_vec());
-                }
+                script_owned =
+                    script::ScriptBuf::from(last_pushdata(script_sig).unwrap().to_vec());
                 &script_owned
             } else {
                 return 0;
             };
 
-            #[cfg(not(feature = "liquid"))]
             if script.is_p2wsh() {
                 let bytes = script.as_bytes();
                 n += sig_ops(witness, bytes[0], &bytes[2..]);
             } else if script.is_p2wpkh() {
-                n += 1;
-            }
-            #[cfg(feature = "liquid")]
-            if script.is_v0_p2wsh() {
-                let bytes = script.as_bytes();
-                n += sig_ops(witness, bytes[0], &bytes[2..]);
-            } else if script.is_v0_p2wpkh() {
                 n += 1;
             }
             n
@@ -334,12 +274,7 @@ pub(super) mod sigops {
         verify_witness: bool,
     ) -> Result<usize, script::Error> {
         let mut n_sigop_cost = get_legacy_sigop_count(tx) * 4;
-        #[cfg(not(feature = "liquid"))]
         if tx.is_coinbase() {
-            return Ok(n_sigop_cost);
-        }
-        #[cfg(feature = "liquid")]
-        if tx.is_coinbase() || tx.input.iter().any(|input| input.is_pegin) {
             return Ok(n_sigop_cost);
         }
         if tx.input.len() != previous_outputs.len() {
@@ -363,28 +298,15 @@ pub(super) mod sigops {
     /// witness_version is the raw opcode. OP_0 is 0, OP_1 is 81, etc.
     #[allow(clippy::redundant_closure)]
     fn sig_ops(witness: &Witness, witness_version: u8, witness_program: &[u8]) -> usize {
-        #[cfg(feature = "liquid")]
-        let last_witness = witness.script_witness.last();
-        #[cfg(not(feature = "liquid"))]
         let last_witness = witness.last();
         match (witness_version, witness_program.len()) {
             (0, 20) => 1,
             (0, 32) => {
-                #[cfg(not(feature = "liquid"))]
-                {
-                    #[allow(clippy::needless_borrow)]
-                    last_witness
-                        .map(|sl| script::Script::from_bytes(sl))
-                        .map(|s| count_sigops(s, true))
-                        .unwrap_or_default()
-                }
-                #[cfg(feature = "liquid")]
-                {
-                    last_witness
-                        .map(|sl| script::Script::from(sl.clone()))
-                        .map(|s| count_sigops(&s, true))
-                        .unwrap_or_default()
-                }
+                #[allow(clippy::needless_borrow)]
+                last_witness
+                    .map(|sl| script::Script::from_bytes(sl))
+                    .map(|s| count_sigops(s, true))
+                    .unwrap_or_default()
             }
             _ => 0,
         }

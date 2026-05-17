@@ -1,10 +1,8 @@
 extern crate electrs;
 
-#[cfg(not(feature = "liquid"))]
 #[macro_use]
 extern crate log;
 
-#[cfg(not(feature = "liquid"))]
 fn main() {
     use std::collections::HashSet;
     use std::sync::Arc;
@@ -155,6 +153,3 @@ fn main() {
         total, uih_totals
     );
 }
-
-#[cfg(feature = "liquid")]
-fn main() {}

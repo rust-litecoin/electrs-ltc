@@ -1,19 +1,11 @@
 use bitcoin::hashes::sha256d::Hash as Sha256dHash;
-#[cfg(not(feature = "liquid"))]
 use bitcoin::merkle_tree::MerkleBlock;
-#[cfg(not(feature = "liquid"))]
 use bitcoin::VarInt;
 use itertools::Itertools;
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 
-#[cfg(not(feature = "liquid"))]
 use bitcoin::consensus::encode::{deserialize, serialize};
-#[cfg(feature = "liquid")]
-use elements::{
-    encode::{deserialize, serialize, VarInt},
-    AssetId,
-};
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::convert::TryInto;
@@ -34,9 +26,6 @@ use crate::util::{
 
 use crate::new_index::db::{DBFlush, DBRow, ReverseScanIterator, ScanIterator, DB};
 use crate::new_index::fetch::{start_fetcher, BlockEntry, FetchFrom};
-
-#[cfg(feature = "liquid")]
-use crate::elements::{asset, peg};
 
 use super::{db::ReverseScanGroupIterator, fetch::bitcoind_sequential_fetcher};
 
@@ -112,13 +101,6 @@ pub struct Utxo {
     pub vout: u32,
     pub confirmed: Option<BlockId>,
     pub value: Value,
-
-    #[cfg(feature = "liquid")]
-    pub asset: elements::confidential::Asset,
-    #[cfg(feature = "liquid")]
-    pub nonce: elements::confidential::Nonce,
-    #[cfg(feature = "liquid")]
-    pub witness: elements::TxOutWitness,
 }
 
 impl From<&Utxo> for OutPoint {
@@ -142,20 +124,11 @@ pub struct ScriptStats {
     pub tx_count: usize,
     pub funded_txo_count: usize,
     pub spent_txo_count: usize,
-    #[cfg(not(feature = "liquid"))]
     pub funded_txo_sum: u64,
-    #[cfg(not(feature = "liquid"))]
     pub spent_txo_sum: u64,
 }
 
 impl ScriptStats {
-    #[cfg(feature = "liquid")]
-    fn is_sane(&self) -> bool {
-        // See below for comments.
-        self.spent_txo_count <= self.funded_txo_count
-            && self.tx_count <= self.spent_txo_count + self.funded_txo_count
-    }
-    #[cfg(not(feature = "liquid"))]
     fn is_sane(&self) -> bool {
         // There are less or equal spends to funds
         self.spent_txo_count <= self.funded_txo_count
@@ -185,8 +158,6 @@ struct IndexerConfig {
     address_search: bool,
     index_unspendables: bool,
     network: Network,
-    #[cfg(feature = "liquid")]
-    parent_network: crate::chain::BNetwork,
 }
 
 impl From<&Config> for IndexerConfig {
@@ -196,8 +167,6 @@ impl From<&Config> for IndexerConfig {
             address_search: config.address_search,
             index_unspendables: config.index_unspendables,
             network: config.network_type,
-            #[cfg(feature = "liquid")]
-            parent_network: config.parent_network,
         }
     }
 }
@@ -312,8 +281,6 @@ impl Indexer {
             self.store.cache_db.delete(vec![
                 StatsCacheRow::key(&script),
                 UtxoCacheRow::key(&script),
-                #[cfg(feature = "liquid")]
-                [b"z", &script[..]].concat(), // asset cache key
             ]);
         }
         Ok(())
@@ -685,7 +652,6 @@ impl ChainQuery {
                 break;
             }
             match info {
-                #[cfg(not(feature = "liquid"))]
                 TxHistoryInfo::Funding(info) => {
                     map.entry(txid)
                         .and_modify(|tx| {
@@ -699,7 +665,6 @@ impl ChainQuery {
                             tx_position,
                         });
                 }
-                #[cfg(not(feature = "liquid"))]
                 TxHistoryInfo::Spending(info) => {
                     map.entry(txid)
                         .and_modify(|tx| {
@@ -713,28 +678,6 @@ impl ChainQuery {
                             tx_position,
                         });
                 }
-                #[cfg(feature = "liquid")]
-                TxHistoryInfo::Funding(_info) => {
-                    map.entry(txid).or_insert(TxHistorySummary {
-                        txid,
-                        value: 0,
-                        height,
-                        time,
-                        tx_position,
-                    });
-                }
-                #[cfg(feature = "liquid")]
-                TxHistoryInfo::Spending(_info) => {
-                    map.entry(txid).or_insert(TxHistorySummary {
-                        txid,
-                        value: 0,
-                        height,
-                        time,
-                        tx_position,
-                    });
-                }
-                #[cfg(feature = "liquid")]
-                _ => {}
             }
         }
         let mut tx_summaries = map.into_values().collect::<Vec<TxHistorySummary>>();
@@ -950,26 +893,11 @@ impl ChainQuery {
         // format as Utxo objects
         Ok(newutxos
             .into_iter()
-            .map(|(outpoint, (blockid, value))| {
-                // in elements/liquid chains, we have to lookup the txo in order to get its
-                // associated asset. the asset information could be kept in the db history rows
-                // alongside the value to avoid this.
-                #[cfg(feature = "liquid")]
-                let txo = self.lookup_txo(&outpoint).expect("missing utxo");
-
-                Utxo {
-                    txid: outpoint.txid,
-                    vout: outpoint.vout,
-                    value,
-                    confirmed: Some(blockid),
-
-                    #[cfg(feature = "liquid")]
-                    asset: txo.asset,
-                    #[cfg(feature = "liquid")]
-                    nonce: txo.nonce,
-                    #[cfg(feature = "liquid")]
-                    witness: txo.witness,
-                }
+            .map(|(outpoint, (blockid, value))| Utxo {
+                txid: outpoint.txid,
+                vout: outpoint.vout,
+                value,
+                confirmed: Some(blockid),
             })
             .collect())
     }
@@ -1006,11 +934,6 @@ impl ChainQuery {
                     utxos.insert(history.get_funded_outpoint(), (blockid, info.value))
                 }
                 TxHistoryInfo::Spending(_) => utxos.remove(&history.get_funded_outpoint()),
-                #[cfg(feature = "liquid")]
-                TxHistoryInfo::Issuing(_)
-                | TxHistoryInfo::Burning(_)
-                | TxHistoryInfo::Pegin(_)
-                | TxHistoryInfo::Pegout(_) => unreachable!(),
             };
 
             // abort if the utxo set size excedees the limit at any point in time
@@ -1090,33 +1013,15 @@ impl ChainQuery {
             }
 
             match history.key.txinfo {
-                #[cfg(not(feature = "liquid"))]
                 TxHistoryInfo::Funding(ref info) => {
                     stats.funded_txo_count += 1;
                     stats.funded_txo_sum += info.value;
                 }
 
-                #[cfg(not(feature = "liquid"))]
                 TxHistoryInfo::Spending(ref info) => {
                     stats.spent_txo_count += 1;
                     stats.spent_txo_sum += info.value;
                 }
-
-                #[cfg(feature = "liquid")]
-                TxHistoryInfo::Funding(_) => {
-                    stats.funded_txo_count += 1;
-                }
-
-                #[cfg(feature = "liquid")]
-                TxHistoryInfo::Spending(_) => {
-                    stats.spent_txo_count += 1;
-                }
-
-                #[cfg(feature = "liquid")]
-                TxHistoryInfo::Issuing(_)
-                | TxHistoryInfo::Burning(_)
-                | TxHistoryInfo::Pegin(_)
-                | TxHistoryInfo::Pegout(_) => unreachable!(),
             }
 
             lastblock = Some(blockid.hash);
@@ -1323,7 +1228,6 @@ impl ChainQuery {
             })
     }
 
-    #[cfg(not(feature = "liquid"))]
     pub fn get_merkleblock_proof(&self, txid: &Txid) -> Option<MerkleBlock> {
         let _timer = self.start_timer("get_merkleblock_proof");
         let blockid = self.tx_confirming_block(txid)?;
@@ -1335,27 +1239,6 @@ impl ChainQuery {
             &block_txids,
             |t| t == txid,
         ))
-    }
-
-    #[cfg(feature = "liquid")]
-    pub fn asset_history<'a>(
-        &'a self,
-        asset_id: &'a AssetId,
-        last_seen_txid: Option<&'a Txid>,
-        limit: usize,
-    ) -> impl rayon::iter::ParallelIterator<Item = Result<(Transaction, BlockId, u16)>> + 'a {
-        self._history(
-            b'I',
-            &asset_id.into_inner()[..],
-            last_seen_txid,
-            None,
-            limit,
-        )
-    }
-
-    #[cfg(feature = "liquid")]
-    pub fn asset_history_txids(&self, asset_id: &AssetId, limit: usize) -> Vec<(Txid, BlockId)> {
-        self._history_txids(b'I', &asset_id.into_inner()[..], limit)
     }
 }
 
@@ -1561,10 +1444,7 @@ fn index_transaction(
     };
     for (txo_index, txo) in tx.output.iter().enumerate() {
         if is_spendable(txo) || iconfig.index_unspendables {
-            #[cfg(not(feature = "liquid"))]
             let value = txo.value.to_sat();
-            #[cfg(feature = "liquid")]
-            let value = txo.value;
             let history = TxHistoryRow::new(
                 &txo.script_pubkey,
                 confirmed_height,
@@ -1593,10 +1473,7 @@ fn index_transaction(
             .get(&txi.previous_output)
             .unwrap_or_else(|| panic!("missing previous txo {}", txi.previous_output));
 
-        #[cfg(not(feature = "liquid"))]
         let prev_value = prev_txo.value.to_sat();
-        #[cfg(feature = "liquid")]
-        let prev_value = prev_txo.value;
 
         let history = TxHistoryRow::new(
             &prev_txo.script_pubkey,
@@ -1621,18 +1498,6 @@ fn index_transaction(
         );
         rows.push(edge.into_row());
     }
-
-    // Index issued assets & native asset pegins/pegouts/burns
-    #[cfg(feature = "liquid")]
-    asset::index_confirmed_tx_assets(
-        tx,
-        confirmed_height,
-        tx_position,
-        iconfig.network,
-        iconfig.parent_network,
-        rows,
-        op,
-    );
 }
 
 fn addr_search_row(spk: &Script, network: Network) -> Option<DBRow> {
@@ -1875,15 +1740,6 @@ pub enum TxHistoryInfo {
     // This ordering comes from the enum order.
     Spending(SpendingInfo),
     Funding(FundingInfo),
-
-    #[cfg(feature = "liquid")]
-    Issuing(asset::IssuingInfo),
-    #[cfg(feature = "liquid")]
-    Burning(asset::BurningInfo),
-    #[cfg(feature = "liquid")]
-    Pegin(peg::PeginInfo),
-    #[cfg(feature = "liquid")]
-    Pegout(peg::PegoutInfo),
 }
 
 impl TxHistoryInfo {
@@ -1891,12 +1747,6 @@ impl TxHistoryInfo {
         match self {
             TxHistoryInfo::Funding(FundingInfo { txid, .. })
             | TxHistoryInfo::Spending(SpendingInfo { txid, .. }) => deserialize(txid),
-
-            #[cfg(feature = "liquid")]
-            TxHistoryInfo::Issuing(asset::IssuingInfo { txid, .. })
-            | TxHistoryInfo::Burning(asset::BurningInfo { txid, .. })
-            | TxHistoryInfo::Pegin(peg::PeginInfo { txid, .. })
-            | TxHistoryInfo::Pegout(peg::PegoutInfo { txid, .. }) => deserialize(txid),
         }
         .expect("cannot parse Txid")
     }
@@ -1905,12 +1755,6 @@ impl TxHistoryInfo {
         match self {
             TxHistoryInfo::Funding(FundingInfo { vout: val, .. })
             | TxHistoryInfo::Spending(SpendingInfo { vin: val, .. }) => *val,
-
-            #[cfg(feature = "liquid")]
-            TxHistoryInfo::Issuing(asset::IssuingInfo { vin: val, .. })
-            | TxHistoryInfo::Burning(asset::BurningInfo { vout: val, .. })
-            | TxHistoryInfo::Pegin(peg::PeginInfo { vin: val, .. })
-            | TxHistoryInfo::Pegout(peg::PegoutInfo { vout: val, .. }) => *val,
         }
     }
 
@@ -1918,11 +1762,6 @@ impl TxHistoryInfo {
         match self {
             TxHistoryInfo::Funding(_) => false,
             TxHistoryInfo::Spending(_) => true,
-
-            #[cfg(feature = "liquid")]
-            TxHistoryInfo::Issuing(_) | TxHistoryInfo::Pegin(_) => true,
-            #[cfg(feature = "liquid")]
-            TxHistoryInfo::Burning(_) | TxHistoryInfo::Pegout(_) => false,
         }
     }
 }
@@ -1930,8 +1769,8 @@ impl TxHistoryInfo {
 #[derive(Serialize, Deserialize)]
 #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
 pub struct TxHistoryKey {
-    pub code: u8,              // H for script history or I for asset history (elements only)
-    pub hash: FullHash, // either a scripthash (always on bitcoin) or an asset id (elements only)
+    pub code: u8,              // H for script history
+    pub hash: FullHash, // scripthash
     pub confirmed_height: u32, // MUST be serialized as big-endian (for correct scans).
     pub tx_position: u16, // MUST be serialized as big-endian (for correct scans). Position in block.
     pub txinfo: TxHistoryInfo,
@@ -2015,11 +1854,6 @@ impl TxHistoryInfo {
                 txid: deserialize(&info.prev_txid).unwrap(),
                 vout: info.prev_vout,
             },
-            #[cfg(feature = "liquid")]
-            TxHistoryInfo::Issuing(_)
-            | TxHistoryInfo::Burning(_)
-            | TxHistoryInfo::Pegin(_)
-            | TxHistoryInfo::Pegout(_) => unreachable!(),
         }
     }
 }
@@ -2177,170 +2011,3 @@ fn from_utxo_cache(utxos_cache: CachedUtxoMap, chain: &ChainQuery) -> UtxoMap {
         .collect()
 }
 
-#[cfg(all(test, feature = "liquid"))]
-mod tests {
-    use super::{DBRow, TxHistoryRow};
-    use crate::chain::Value;
-    use std::convert::TryInto;
-
-    #[test]
-    fn tx_history_row_ser_deser_tests() {
-        #[rustfmt::skip]
-        let inputs = [
-            vec![
-                // code
-                72,
-                // hash
-                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-                   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-                // confirmed_height
-                0, 0, 0, 2,
-                // tx_position
-                0, 3,
-                // TxHistoryInfo variant (Funding)
-                0, 0, 0, 1,
-                // FundingInfo
-                // txid
-                2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-                   2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-                // vout
-                0, 0, 0, 3,
-                // Value variant (Explicit)
-                0, 0, 0, 0, 0, 0, 0, 2,
-                // number of tuple elements
-                1,
-                // Inner value (u64)
-                7, 0, 0, 0, 0, 0, 0, 0,
-            ],
-            vec![
-                72,
-                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-                   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-                0, 0, 0, 2,
-                0, 3,
-                0, 0, 0, 1,
-                2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-                   2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-                0, 0, 0, 3,
-                // Value variant (Null)
-                0, 0, 0, 0, 0, 0, 0, 1,
-                // number of tuple elements
-                0,
-            ],
-            vec![
-                72,
-                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-                   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-                0, 0, 0, 2,
-                0, 3,
-                0, 0, 0, 0,
-                18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18,
-                    18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18,
-                0, 0, 0, 12,
-                98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102,
-                    98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102,
-                0, 0, 0, 9,
-                0, 0, 0, 0, 0, 0, 0, 2,
-                1,
-                14, 0, 0, 0, 0, 0, 0, 0,
-            ],
-            vec![
-                72,
-                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-                   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-                0, 0, 0, 2,
-                0, 3,
-                0, 0, 0, 0,
-                18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18,
-                    18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18,
-                0, 0, 0, 12,
-                98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102,
-                    98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102,
-                0, 0, 0, 9,
-                0, 0, 0, 0, 0, 0, 0, 1,
-                0,
-            ],
-        ];
-        let expected = [
-            super::TxHistoryRow {
-                key: super::TxHistoryKey {
-                    code: b'H',
-                    hash: [1; 32],
-                    confirmed_height: 2,
-                    tx_position: 3,
-                    txinfo: super::TxHistoryInfo::Funding(super::FundingInfo {
-                        txid: [2; 32],
-                        vout: 3,
-                        value: Value::Explicit(7),
-                    }),
-                },
-            },
-            super::TxHistoryRow {
-                key: super::TxHistoryKey {
-                    code: b'H',
-                    hash: [1; 32],
-                    confirmed_height: 2,
-                    tx_position: 3,
-                    txinfo: super::TxHistoryInfo::Funding(super::FundingInfo {
-                        txid: [2; 32],
-                        vout: 3,
-                        value: Value::Null,
-                    }),
-                },
-            },
-            super::TxHistoryRow {
-                key: super::TxHistoryKey {
-                    code: b'H',
-                    hash: [1; 32],
-                    confirmed_height: 2,
-                    tx_position: 3,
-                    txinfo: super::TxHistoryInfo::Spending(super::SpendingInfo {
-                        txid: [18; 32],
-                        vin: 12,
-                        prev_txid: "beef".repeat(8).as_bytes().try_into().unwrap(),
-                        prev_vout: 9,
-                        value: Value::Explicit(14),
-                    }),
-                },
-            },
-            super::TxHistoryRow {
-                key: super::TxHistoryKey {
-                    code: b'H',
-                    hash: [1; 32],
-                    confirmed_height: 2,
-                    tx_position: 3,
-                    txinfo: super::TxHistoryInfo::Spending(super::SpendingInfo {
-                        txid: [18; 32],
-                        vin: 12,
-                        prev_txid: "beef".repeat(8).as_bytes().try_into().unwrap(),
-                        prev_vout: 9,
-                        value: Value::Null,
-                    }),
-                },
-            },
-        ];
-        for (expected_row, input) in
-            IntoIterator::into_iter(expected).zip(IntoIterator::into_iter(inputs))
-        {
-            let input_row = DBRow {
-                key: input,
-                value: vec![],
-            };
-            assert_eq!(TxHistoryRow::from_row(input_row).key, expected_row.key);
-        }
-
-        #[rustfmt::skip]
-        assert_eq!(
-            TxHistoryRow::prefix_height(b'H', "beef".repeat(8).as_bytes(), 1337),
-            vec![
-                // code
-                72,
-                // hash
-                98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102,
-                98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102,
-                // height
-                0, 0, 5, 57
-            ]
-        );
-    }
-}

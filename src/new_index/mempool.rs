@@ -1,10 +1,7 @@
 use bounded_vec_deque::BoundedVecDeque;
 use itertools::Itertools;
 
-#[cfg(not(feature = "liquid"))]
 use bitcoin::consensus::encode::serialize;
-#[cfg(feature = "liquid")]
-use elements::{encode::serialize, AssetId};
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::iter::FromIterator;
@@ -24,9 +21,6 @@ use crate::new_index::{
 use crate::util::fees::{make_fee_histogram, TxFeeInfo};
 use crate::util::{extract_tx_prevouts, full_hash, has_prevout, is_spendable, Bytes};
 
-#[cfg(feature = "liquid")]
-use crate::elements::asset;
-
 pub struct Mempool {
     chain: Arc<ChainQuery>,
     config: Arc<Config>,
@@ -41,12 +35,6 @@ pub struct Mempool {
     latency: HistogramVec, // mempool requests latency
     delta: HistogramVec,   // # of added/removed txs
     count: GaugeVec,       // current state of the mempool
-
-    // elements only
-    #[cfg(feature = "liquid")]
-    pub asset_history: HashMap<AssetId, Vec<TxHistoryInfo>>,
-    #[cfg(feature = "liquid")]
-    pub asset_issuance: HashMap<AssetId, asset::AssetRow>,
 }
 
 // A simplified transaction view used for the list of most recent transactions
@@ -55,7 +43,6 @@ pub struct TxOverview {
     txid: Txid,
     fee: u64,
     vsize: u32,
-    #[cfg(not(feature = "liquid"))]
     value: u64,
 }
 
@@ -85,10 +72,6 @@ impl Mempool {
                 &["type"],
             ),
 
-            #[cfg(feature = "liquid")]
-            asset_history: HashMap::new(),
-            #[cfg(feature = "liquid")]
-            asset_issuance: HashMap::new(),
             config,
         }
     }
@@ -246,31 +229,13 @@ impl Mempool {
         entries
             .iter()
             .filter_map(|entry| match entry {
-                TxHistoryInfo::Funding(info) => {
-                    // Liquid requires some additional information from the txo that's not available in the TxHistoryInfo index.
-                    #[cfg(feature = "liquid")]
-                    let txo = self.lookup_txo(&entry.get_funded_outpoint())?;
-
-                    Some(Utxo {
-                        txid: deserialize(&info.txid).expect("invalid txid"),
-                        vout: info.vout,
-                        value: info.value,
-                        confirmed: None,
-
-                        #[cfg(feature = "liquid")]
-                        asset: txo.asset,
-                        #[cfg(feature = "liquid")]
-                        nonce: txo.nonce,
-                        #[cfg(feature = "liquid")]
-                        witness: txo.witness,
-                    })
-                }
+                TxHistoryInfo::Funding(info) => Some(Utxo {
+                    txid: deserialize(&info.txid).expect("invalid txid"),
+                    vout: info.vout,
+                    value: info.value,
+                    confirmed: None,
+                }),
                 TxHistoryInfo::Spending(_) => None,
-                #[cfg(feature = "liquid")]
-                TxHistoryInfo::Issuing(_)
-                | TxHistoryInfo::Burning(_)
-                | TxHistoryInfo::Pegin(_)
-                | TxHistoryInfo::Pegout(_) => unreachable!(),
             })
             .filter(|utxo| !self.has_spend(&OutPoint::from(utxo)))
             .collect()
@@ -293,32 +258,15 @@ impl Mempool {
             }
 
             match entry {
-                #[cfg(not(feature = "liquid"))]
                 TxHistoryInfo::Funding(info) => {
                     stats.funded_txo_count += 1;
                     stats.funded_txo_sum += info.value;
                 }
 
-                #[cfg(not(feature = "liquid"))]
                 TxHistoryInfo::Spending(info) => {
                     stats.spent_txo_count += 1;
                     stats.spent_txo_sum += info.value;
                 }
-
-                // Elements
-                #[cfg(feature = "liquid")]
-                TxHistoryInfo::Funding(_) => {
-                    stats.funded_txo_count += 1;
-                }
-                #[cfg(feature = "liquid")]
-                TxHistoryInfo::Spending(_) => {
-                    stats.spent_txo_count += 1;
-                }
-                #[cfg(feature = "liquid")]
-                TxHistoryInfo::Issuing(_)
-                | TxHistoryInfo::Burning(_)
-                | TxHistoryInfo::Pegin(_)
-                | TxHistoryInfo::Pegout(_) => unreachable!(),
             };
         }
 
@@ -504,7 +452,6 @@ impl Mempool {
         // 5. Create the Spend and Fund TxHistory structs for inputs + outputs
         // 6. Insert all TxHistory into history.
         // 7. Insert the tx edges into edges (HashMap of (Outpoint, (Txid, vin)))
-        // 8. (Liquid only) Parse assets of tx.
         for txid in txids {
             let tx = self.txstore.get(&txid).expect("missing tx from txstore");
 
@@ -525,7 +472,6 @@ impl Mempool {
                 txid,
                 fee: feeinfo.fee,
                 vsize: feeinfo.vsize,
-                #[cfg(not(feature = "liquid"))]
                 value: prevouts
                     .values()
                     .map(|prevout| prevout.value.to_sat())
@@ -537,10 +483,7 @@ impl Mempool {
             // An iterator over (ScriptHash, TxHistoryInfo)
             let spending = prevouts.into_iter().map(|(input_index, prevout)| {
                 let txi = tx.input.get(input_index as usize).unwrap();
-                #[cfg(not(feature = "liquid"))]
                 let value = prevout.value.to_sat();
-                #[cfg(feature = "liquid")]
-                let value = prevout.value;
                 (
                     compute_script_hash(&prevout.script_pubkey),
                     TxHistoryInfo::Spending(SpendingInfo {
@@ -562,10 +505,7 @@ impl Mempool {
                 .enumerate()
                 .filter(|(_, txo)| is_spendable(txo) || config.index_unspendables)
                 .map(|(index, txo)| {
-                    #[cfg(not(feature = "liquid"))]
                     let value = txo.value.to_sat();
-                    #[cfg(feature = "liquid")]
-                    let value = txo.value;
                     (
                         compute_script_hash(&txo.script_pubkey),
                         TxHistoryInfo::Funding(FundingInfo {
@@ -583,16 +523,6 @@ impl Mempool {
             for (i, txi) in tx.input.iter().enumerate() {
                 self.edges.insert(txi.previous_output, (txid, i as u32));
             }
-
-            // Index issued assets & native asset pegins/pegouts/burns
-            #[cfg(feature = "liquid")]
-            asset::index_mempool_tx_assets(
-                tx,
-                self.config.network_type,
-                self.config.parent_network,
-                &mut self.asset_history,
-                &mut self.asset_issuance,
-            );
 
             processed_count += 1;
         }
@@ -681,28 +611,8 @@ impl Mempool {
             !entries.is_empty()
         });
 
-        #[cfg(feature = "liquid")]
-        asset::remove_mempool_tx_assets(
-            &to_remove,
-            &mut self.asset_history,
-            &mut self.asset_issuance,
-        );
-
         self.edges
             .retain(|_outpoint, (txid, _vin)| !to_remove.contains(txid));
-    }
-
-    #[cfg(feature = "liquid")]
-    pub fn asset_history(&self, asset_id: &AssetId, limit: usize) -> Vec<Transaction> {
-        let _timer = self
-            .latency
-            .with_label_values(&["asset_history"])
-            .start_timer();
-        self.asset_history
-            .get(asset_id)
-            .map_or_else(std::vec::Vec::new, |entries| {
-                self._history(entries, None, limit)
-            })
     }
 }
 

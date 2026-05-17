@@ -16,9 +16,6 @@ Install Rust, Bitcoin Core (no `txindex` needed) and the `clang` and `cmake` pac
 $ git clone https://github.com/mempool/electrs && cd electrs
 $ git checkout mempool
 $ cargo run --release --bin electrs -- -vvvv --daemon-dir ~/.bitcoin
-
-# Or for liquid:
-$ cargo run --features liquid --release --bin electrs -- -vvvv --network liquid --daemon-dir ~/.liquid
 ```
 
 See [electrs's original documentation](https://github.com/romanz/electrs/blob/master/doc/usage.md) for more detailed instructions.
@@ -53,9 +50,6 @@ but instead queried from bitcoind on demand.
   With these new indexes, bitcoind is no longer queried to serve user requests and is only polled
   periodically for new blocks and for syncing the mempool.
 
-- Support for Liquid and other Elements-based networks, including CT, peg-in/out and multi-asset.
-  (requires enabling the `liquid` feature flag using `--features liquid`)
-
 ### CLI options
 
 In addition to electrs's original configuration options, a few new options are also available:
@@ -68,9 +62,6 @@ In addition to electrs's original configuration options, a few new options are a
 - `--utxos-limit <num>` - maximum number of utxos to return per address.
 - `--electrum-txs-limit <num>` - maximum number of txs to return per address in the electrum server (does not apply for the http api).
 - `--electrum-banner <text>` - welcome banner text for electrum server.
-
-Additional options with the `liquid` feature:
-- `--parent-network <network>` - the parent network this chain is pegged to.
 
 Additional options with the `electrum-discovery` feature:
 - `--electrum-hosts <json>` - a json map of the public hosts where the electrum server is reachable, in the [`server.features` format](https://electrumx.readthedocs.io/en/latest/protocol-methods.html#server.features).

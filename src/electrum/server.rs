@@ -20,10 +20,7 @@ use hex;
 use serde_json::{from_str, Value};
 use sha2::{Digest, Sha256};
 
-#[cfg(not(feature = "liquid"))]
 use bitcoin::consensus::encode::serialize;
-#[cfg(feature = "liquid")]
-use elements::encode::serialize;
 
 use crate::chain::Txid;
 use crate::config::{Config, VERSION_STRING};
@@ -341,7 +338,6 @@ impl Connection {
         Ok(Value::Bool(removed))
     }
 
-    #[cfg(not(feature = "liquid"))]
     fn blockchain_scripthash_get_balance(&self, params: &[Value]) -> Result<Value> {
         let script_hash = hash_from_value(params.first()).chain_err(|| "bad script_hash")?;
         let (chain_stats, mempool_stats) = self.query.stats(&script_hash[..]);
@@ -381,14 +377,6 @@ impl Connection {
                 "tx_hash": utxo.txid,
                 "value": utxo.value,
             });
-
-            #[cfg(feature = "liquid")]
-            let json = {
-                let mut json = json;
-                json["asset"] = json!(utxo.asset);
-                json["nonce"] = json!(utxo.nonce);
-                json
-            };
 
             json
         };
@@ -474,7 +462,6 @@ impl Connection {
             "blockchain.estimatefee" => self.blockchain_estimatefee(params),
             "blockchain.headers.subscribe" => self.blockchain_headers_subscribe(),
             "blockchain.relayfee" => self.blockchain_relayfee(),
-            #[cfg(not(feature = "liquid"))]
             "blockchain.scripthash.get_balance" => self.blockchain_scripthash_get_balance(params),
             "blockchain.scripthash.get_history" => self.blockchain_scripthash_get_history(params),
             "blockchain.scripthash.listunspent" => self.blockchain_scripthash_listunspent(params),
