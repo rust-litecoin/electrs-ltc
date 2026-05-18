@@ -1,5 +1,3 @@
-use std::str::FromStr;
-
 pub use bitcoin::{
     address,
     block::Header as BlockHeader,
@@ -45,18 +43,10 @@ pub enum Network {
     Signet,
 }
 
-/// Magic for testnet4, 0x1c163f28 (from BIP94) with flipped endianness.
-const TESTNET4_MAGIC: u32 = 0x283f161c;
-
 impl Network {
     pub fn magic(self) -> u32 {
-        match self {
-            Self::Testnet4 => TESTNET4_MAGIC,
-            _ => {
-                let magic = BNetwork::from(self).magic();
-                u32::from_le_bytes(magic.to_bytes())
-            }
-        }
+        let magic = BNetwork::from(self).magic();
+        u32::from_le_bytes(magic.to_bytes())
     }
 
     pub fn is_regtest(self) -> bool {
@@ -77,31 +67,11 @@ impl Network {
 }
 
 pub fn genesis_hash(network: Network) -> BlockHash {
-    return bitcoin_genesis_hash(network);
+    return litecoin_genesis_hash(network);
 }
 
-pub fn bitcoin_genesis_hash(network: Network) -> bitcoin::BlockHash {
-    lazy_static! {
-        static ref BITCOIN_GENESIS: bitcoin::BlockHash =
-            genesis_block(BNetwork::Bitcoin).block_hash();
-        static ref TESTNET_GENESIS: bitcoin::BlockHash =
-            genesis_block(BNetwork::Testnet).block_hash();
-        static ref TESTNET4_GENESIS: bitcoin::BlockHash = bitcoin::BlockHash::from_str(
-            "00000000da84f2bafbbc53dee25a72ae507ff4914b867c565be350b0da8bf043"
-        )
-        .unwrap();
-        static ref REGTEST_GENESIS: bitcoin::BlockHash =
-            genesis_block(BNetwork::Regtest).block_hash();
-        static ref SIGNET_GENESIS: bitcoin::BlockHash =
-            genesis_block(BNetwork::Signet).block_hash();
-    }
-    match network {
-        Network::Bitcoin => *BITCOIN_GENESIS,
-        Network::Testnet => *TESTNET_GENESIS,
-        Network::Testnet4 => *TESTNET4_GENESIS,
-        Network::Regtest => *REGTEST_GENESIS,
-        Network::Signet => *SIGNET_GENESIS,
-    }
+pub fn litecoin_genesis_hash(network: Network) -> bitcoin::BlockHash {
+    genesis_block(BNetwork::from(network)).block_hash()
 }
 
 impl From<&str> for Network {
@@ -113,7 +83,7 @@ impl From<&str> for Network {
             "regtest" => Network::Regtest,
             "signet" => Network::Signet,
 
-            _ => panic!("unsupported Bitcoin network: {:?}", network_name),
+            _ => panic!("unsupported Litecoin network: {:?}", network_name),
         }
     }
 }
@@ -122,7 +92,8 @@ impl From<Network> for BNetwork {
     fn from(network: Network) -> Self {
         match network {
             Network::Bitcoin => BNetwork::Bitcoin,
-            Network::Testnet => BNetwork::Testnet,
+            // litecoin crate has no legacy Testnet variant; treat both as Testnet4
+            Network::Testnet => BNetwork::Testnet4,
             Network::Testnet4 => BNetwork::Testnet4,
             Network::Regtest => BNetwork::Regtest,
             Network::Signet => BNetwork::Signet,
@@ -134,7 +105,6 @@ impl From<BNetwork> for Network {
     fn from(network: BNetwork) -> Self {
         match network {
             BNetwork::Bitcoin => Network::Bitcoin,
-            BNetwork::Testnet => Network::Testnet,
             BNetwork::Testnet4 => Network::Testnet4,
             BNetwork::Regtest => Network::Regtest,
             BNetwork::Signet => Network::Signet,

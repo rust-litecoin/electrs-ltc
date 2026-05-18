@@ -1,7 +1,7 @@
 use crate::chain::{
     BlockHash, Network, OutPoint, Script, Transaction, TxIn, TxOut, Txid, TxidCompat,
 };
-use crate::config::{Config, BITCOIND_SUBVER, VERSION_STRING};
+use crate::config::{Config, LITECOIND_SUBVER, VERSION_STRING};
 use crate::errors;
 use crate::metrics::Metrics;
 use crate::new_index::{compute_script_hash, Query, SpendingInput, Utxo};
@@ -476,9 +476,9 @@ async fn run_server(
                         resp.headers_mut()
                             .insert("Access-Control-Allow-Origin", origins.parse().unwrap());
                     }
-                    if let Some(subver) = BITCOIND_SUBVER.get() {
+                    if let Some(subver) = LITECOIND_SUBVER.get() {
                         resp.headers_mut()
-                            .insert("X-Bitcoin-Version", HeaderValue::from_static(subver));
+                            .insert("X-Litecoin-Version", HeaderValue::from_static(subver));
                     }
                     timer.observe_duration();
                     Ok::<_, hyper::Error>(resp)
@@ -1683,7 +1683,6 @@ fn address_to_scripthash(addr: &str, network: Network) -> Result<FullHash, HttpE
         // Testnet, Regtest and Signet all share the same version bytes,
         // so we need to allow require_network to succeed for all testnet-family networks
         let testnet_family = [
-            bitcoin::Network::Testnet,
             bitcoin::Network::Regtest,
             bitcoin::Network::Signet,
             bitcoin::Network::Testnet4,
@@ -1756,7 +1755,7 @@ impl From<bitcoin::hashes::hex::HexToArrayError> for HttpError {
 impl From<bitcoin::address::ParseError> for HttpError {
     fn from(_e: bitcoin::address::ParseError) -> Self {
         //HttpError::from(e.description().to_string())
-        HttpError::from("Invalid Bitcoin address".to_string())
+        HttpError::from("Invalid Litecoin address".to_string())
     }
 }
 impl From<errors::Error> for HttpError {

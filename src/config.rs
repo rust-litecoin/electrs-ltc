@@ -15,7 +15,7 @@ pub(crate) const APP_NAME: &str = "mempool-electrs";
 pub(crate) const ELECTRS_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub(crate) const GIT_HASH: Option<&str> = option_env!("GIT_HASH");
 // This will be set only once in the Daemon::new() constructor at startup
-pub(crate) static BITCOIND_SUBVER: OnceLock<String> = OnceLock::new();
+pub(crate) static LITECOIND_SUBVER: OnceLock<String> = OnceLock::new();
 
 lazy_static! {
     pub(crate) static ref VERSION_STRING: String = {
@@ -115,19 +115,19 @@ impl Config {
             .arg(
                 Arg::with_name("daemon_dir")
                     .long("daemon-dir")
-                    .help("Data directory of Bitcoind (default: ~/.bitcoin/)")
+                    .help("Data directory of Litecoind (default: ~/.litecoin/)")
                     .takes_value(true),
             )
             .arg(
                 Arg::with_name("blocks_dir")
                     .long("blocks-dir")
-                    .help("Analogous to bitcoind's -blocksdir option, this specifies the directory containing the raw blocks files (blk*.dat) (default: ~/.bitcoin/blocks/)")
+                    .help("Analogous to litecoind's -blocksdir option, this specifies the directory containing the raw blocks files (blk*.dat) (default: ~/.litecoin/blocks/)")
                     .takes_value(true),
             )
             .arg(
                 Arg::with_name("cookie")
                     .long("cookie")
-                    .help("JSONRPC authentication cookie ('USER:PASSWORD', default: read from ~/.bitcoin/.cookie)")
+                    .help("JSONRPC authentication cookie ('USER:PASSWORD', default: read from ~/.litecoin/.cookie)")
                     .takes_value(true),
             )
             .arg(
@@ -157,7 +157,7 @@ impl Config {
             .arg(
                 Arg::with_name("daemon_rpc_addr")
                     .long("daemon-rpc-addr")
-                    .help("Bitcoin daemon JSONRPC 'addr:port' to connect (default: 127.0.0.1:8332 for mainnet, 127.0.0.1:18332 for testnet and 127.0.0.1:18443 for regtest)")
+                    .help("Litecoin daemon JSONRPC 'addr:port' to connect (default: 127.0.0.1:9332 for mainnet, 127.0.0.1:19332 for testnet and 127.0.0.1:19443 for regtest)")
                     .takes_value(true),
             )
             .arg(
@@ -346,9 +346,9 @@ impl Config {
         let db_path = db_dir.join(network_name);
 
         let default_daemon_port = match network_type {
-            Network::Bitcoin => 8332,
-            Network::Testnet => 18332,
-            Network::Regtest => 18443,
+            Network::Bitcoin => 9332,
+            Network::Testnet => 19332,
+            Network::Regtest => 19443,
             Network::Signet => 38332,
             Network::Testnet4 => 48332,
         };
@@ -377,7 +377,7 @@ impl Config {
         let daemon_rpc_addr: SocketAddr = str_to_socketaddr(
             m.value_of("daemon_rpc_addr")
                 .unwrap_or(&format!("127.0.0.1:{}", default_daemon_port)),
-            "Bitcoin RPC",
+            "Litecoin RPC",
         );
         let electrum_rpc_addr: SocketAddr = str_to_socketaddr(
             m.value_of("electrum_rpc_addr")
@@ -403,12 +403,12 @@ impl Config {
             .map(PathBuf::from)
             .unwrap_or_else(|| {
                 let mut default_dir = home_dir().expect("no homedir");
-                default_dir.push(".bitcoin");
+                default_dir.push(".litecoin");
                 default_dir
             });
         match network_type {
             Network::Bitcoin => (),
-            Network::Testnet => daemon_dir.push("testnet3"),
+            Network::Testnet => daemon_dir.push("testnet4"),
             Network::Testnet4 => daemon_dir.push("testnet4"),
             Network::Regtest => daemon_dir.push("regtest"),
             Network::Signet => daemon_dir.push("signet"),

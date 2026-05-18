@@ -16,7 +16,7 @@ use serde_json::{from_str, from_value, Value};
 use bitcoin::consensus::encode::{deserialize, serialize};
 
 use crate::chain::{Block, BlockHash, BlockHeader, Network, Transaction, Txid};
-use crate::config::BITCOIND_SUBVER;
+use crate::config::LITECOIND_SUBVER;
 use crate::metrics::{HistogramOpts, HistogramVec, Metrics};
 use crate::signal::Waiter;
 use crate::util::HeaderList;
@@ -113,7 +113,7 @@ pub struct MempoolInfo {
 struct NetworkInfo {
     version: u64,
     subversion: String,
-    relayfee: f64, // in BTC/kB
+    relayfee: f64, // in LTC/kB
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -346,11 +346,11 @@ impl Daemon {
             message_id: Counter::new(),
             signal: signal.clone(),
             latency: metrics.histogram_vec(
-                HistogramOpts::new("daemon_rpc", "Bitcoind RPC latency (in seconds)"),
+                HistogramOpts::new("daemon_rpc", "Litecoind RPC latency (in seconds)"),
                 &["method"],
             ),
             size: metrics.histogram_vec(
-                HistogramOpts::new("daemon_bytes", "Bitcoind RPC size (in bytes)"),
+                HistogramOpts::new("daemon_bytes", "Litecoind RPC size (in bytes)"),
                 &["method", "dir"],
             ),
         };
@@ -358,17 +358,17 @@ impl Daemon {
         info!("{:?}", network_info);
         if network_info.version < 16_00_00 {
             bail!(
-                "{} is not supported - please use bitcoind 0.16+",
+                "{} is not supported - please use litecoind 0.16+",
                 network_info.subversion,
             )
         }
-        // Insert the subversion (/Satoshi xx.xx.xx(comment)/) string from bitcoind
-        _ = BITCOIND_SUBVER.set(network_info.subversion);
+        // Insert the subversion (/LitecoinCore:xx.xx.xx(comment)/) string from litecoind
+        _ = LITECOIND_SUBVER.set(network_info.subversion);
 
         let blockchain_info = daemon.getblockchaininfo()?;
         info!("{:?}", blockchain_info);
         if blockchain_info.pruned {
-            bail!("pruned node is not supported (use '-prune=0' bitcoind flag)".to_owned())
+            bail!("pruned node is not supported (use '-prune=0' litecoind flag)".to_owned())
         }
         loop {
             let info = daemon.getblockchaininfo()?;
@@ -385,7 +385,7 @@ impl Daemon {
             }
 
             warn!(
-                "waiting for bitcoind sync and mempool load to finish: {}/{} blocks, verification progress: {:.3}%, mempool loaded: {}",
+                "waiting for litecoind sync and mempool load to finish: {}/{} blocks, verification progress: {:.3}%, mempool loaded: {}",
                 info.blocks,
                 info.headers,
                 info.verificationprogress * 100.0,
@@ -500,7 +500,7 @@ impl Daemon {
         loop {
             match self.handle_request_batch(method, params_list, failure_threshold) {
                 Err(Error(ErrorKind::Connection(msg), _)) => {
-                    warn!("reconnecting to bitcoind: {}", msg);
+                    warn!("reconnecting to litecoind: {}", msg);
                     self.signal.wait(Duration::from_secs(3), false)?;
                     let mut conn = self.conn.lock().unwrap();
                     *conn = conn.reconnect()?;
@@ -521,7 +521,7 @@ impl Daemon {
         self.retry_request_batch(method, params_list, 0.0)
     }
 
-    // bitcoind JSONRPC API:
+    // litecoind JSONRPC API:
 
     pub fn getblockchaininfo(&self) -> Result<BlockchainInfo> {
         let info: Value = self.request("getblockchaininfo", json!([]))?;
@@ -701,7 +701,7 @@ impl Daemon {
                     return None;
                 }
 
-                // from BTC/kB to sat/b
+                // from LTC/kB to lit/b
                 Some((*target, feerate * 100_000f64))
             })
             .collect())
@@ -770,7 +770,7 @@ impl Daemon {
     pub fn get_relayfee(&self) -> Result<f64> {
         let relayfee = self.getnetworkinfo()?.relayfee;
 
-        // from BTC/kB to sat/b
+        // from LTC/kB to lit/b
         Ok(relayfee * 100_000f64)
     }
 }

@@ -10,12 +10,12 @@ Documentation for the database schema and indexing process [is available here](d
 
 ### Installing & indexing
 
-Install Rust, Bitcoin Core (no `txindex` needed) and the `clang` and `cmake` packages, then:
+Install Rust, Litecoin Core (no `txindex` needed) and the `clang` and `cmake` packages, then:
 
 ```bash
 $ git clone https://github.com/mempool/electrs && cd electrs
 $ git checkout mempool
-$ cargo run --release --bin electrs -- -vvvv --daemon-dir ~/.bitcoin
+$ cargo run --release --bin electrs -- -vvvv --daemon-dir ~/.litecoin
 ```
 
 See [electrs's original documentation](https://github.com/romanz/electrs/blob/master/doc/usage.md) for more detailed instructions.
@@ -32,7 +32,7 @@ by roughly 50% at the cost of slower and more expensive lookups.
 
 With this option set, raw transactions and metadata associated with blocks will not be kept in rocksdb
 (the `T`, `X` and `M` indexes),
-but instead queried from bitcoind on demand.
+but instead queried from litecoind on demand.
 
 ### Notable changes from Electrs:
 
@@ -47,7 +47,7 @@ but instead queried from bitcoind on demand.
   - A map of blockhash to txids is kept in the database under the prefix `X`.
   - Block stats metadata (number of transactions, size and weight) is kept in the database under the prefix `M`.
 
-  With these new indexes, bitcoind is no longer queried to serve user requests and is only polled
+  With these new indexes, litecoind is no longer queried to serve user requests and is only polled
   periodically for new blocks and for syncing the mempool.
 
 ### CLI options
