@@ -340,6 +340,27 @@ impl From<Utxo> for UtxoValue {
     }
 }
 
+#[derive(Serialize)]
+struct UtxoWithHexValue {
+    txid: Txid,
+    vout: u32,
+    status: TransactionStatus,
+    value: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hex: Option<String>,
+}
+impl UtxoWithHexValue {
+    fn from_utxo_with_hex(utxo: Utxo, hex: Option<String>) -> Self {
+        UtxoWithHexValue {
+            txid: utxo.txid,
+            vout: utxo.vout,
+            status: TransactionStatus::from(utxo.confirmed),
+            value: utxo.value,
+            hex,
+        }
+    }
+}
+
 #[derive(Serialize, Default)]
 struct SpendingValue {
     spent: bool,
@@ -1151,6 +1172,33 @@ fn handle_request(
                 .map(UtxoValue::from)
                 .collect();
             // XXX paging?
+            json_response(utxos, TTL_SHORT)
+        }
+        (
+            &Method::GET,
+            Some(script_type @ &"address"),
+            Some(script_str),
+            Some(&"utxo-hex"),
+            None,
+            None,
+        )
+        | (
+            &Method::GET,
+            Some(script_type @ &"scripthash"),
+            Some(script_str),
+            Some(&"utxo-hex"),
+            None,
+            None,
+        ) => {
+            let script_hash = to_scripthash(script_type, script_str, config.network_type)?;
+            let utxos: Vec<UtxoWithHexValue> = query
+                .utxo(&script_hash[..])?
+                .into_iter()
+                .map(|utxo| {
+                    let hex = query.lookup_raw_txn(&utxo.txid).map(hex::encode);
+                    UtxoWithHexValue::from_utxo_with_hex(utxo, hex)
+                })
+                .collect();
             json_response(utxos, TTL_SHORT)
         }
         (&Method::GET, Some(&"address-prefix"), Some(prefix), None, None, None) => {
