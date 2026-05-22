@@ -287,12 +287,7 @@ fn parse_blocks(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
         cursor.set_position(end);
     }
 
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(0) // CPU-bound
-        .thread_name(|i| format!("parse-blocks-{}", i))
-        .build()
-        .unwrap();
-    Ok(pool.install(|| {
+    Ok(super::THREAD_POOL.install(|| {
         slices
             .into_par_iter()
             .map(|(slice, size)| (deserialize(slice).expect("failed to parse Block"), size))
