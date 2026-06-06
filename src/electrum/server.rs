@@ -864,12 +864,14 @@ impl Connection {
         // connection before treating the stream as Electrum requests. The parsed
         // addresses are forwarded over the channel so the connection can identify
         // the client; any leftover bytes belong to the first Electrum request.
+        let (proxy_addrs, leftover) = Connection::read_proxy_headers(&mut stream)?;
         let leftover = if parse_proxy {
-            let (proxy_addrs, leftover) = Connection::read_proxy_headers(&mut stream)?;
             tx.send(Message::Proxy(proxy_addrs))
                 .chain_err(|| "channel closed")?;
             leftover
         } else {
+            // If we're not configured to parse PROXY headers, just discard them and any
+            // bytes read while looking for them, to avoid confusing the Electrum request parser.
             tx.send(Message::Proxy(None))
                 .chain_err(|| "channel closed")?;
             Vec::new()
