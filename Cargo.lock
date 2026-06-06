@@ -921,6 +921,7 @@ dependencies = [
  "log",
  "num_cpus",
  "page_size",
+ "ppp",
  "prometheus",
  "rayon",
  "rocksdb",
@@ -1106,6 +1107,15 @@ name = "pkg-config"
 version = "0.3.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "26072860ba924cbfa98ea39c8c19b4dd6a4a25423dbdf219c1eca91aa0cf6964"
+
+[[package]]
+name = "ppp"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a7a2049cd2570bd67bf0228e86bf850f8ceb5190a345c471d03a909da6049e0"
+dependencies = [
+ "thiserror",
+]
 
 [[package]]
 name = "prettyplease"
