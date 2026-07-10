@@ -340,6 +340,7 @@ impl Indexer {
         start_fetcher(self.from, &daemon, to_index)?
             .map(|blocks| self.index(&blocks, Operation::AddBlocks));
         self.start_auto_compactions(&self.store.history_db);
+        self.start_auto_compactions(&self.store.cache_db);
 
         if let DBFlush::Disable = self.flush {
             debug!("flushing to disk");
