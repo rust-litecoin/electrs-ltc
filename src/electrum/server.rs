@@ -856,26 +856,27 @@ impl Connection {
         stream: ConnectionStream,
         tx: crossbeam_channel::Sender<Message>,
         max_line_size: usize,
-        parse_proxy: bool,
     ) -> Result<()> {
         let mut stream = stream;
 
-        // Parse any PROXY-protocol (HAProxy) headers at the very start of the
-        // connection before treating the stream as Electrum requests. The parsed
-        // addresses are forwarded over the channel so the connection can identify
-        // the client; any leftover bytes belong to the first Electrum request.
+        // Consume any PROXY-protocol (HAProxy) headers at the very start of the
+        // connection before treating the stream as Electrum requests. We always
+        // consume them — even when HAProxy support is disabled
+        // (`electrum-haproxy-depth = 0`) — so that PROXY headers sent by an
+        // accidentally-misconfigured upstream are stripped instead of corrupting
+        // the Electrum request parser.
+        //
+        // Crucially, `read_proxy_headers` only ever buffers bytes it has already
+        // read from the socket: when no PROXY header is present it returns those
+        // bytes as `leftover` so the start of the first Electrum request is
+        // preserved rather than discarded.
+        //
+        // The parsed addresses are forwarded over the channel; whether they are
+        // actually used to identify the client is decided later based on the
+        // configured `electrum-haproxy-depth` (a depth of 0 ignores them).
         let (proxy_addrs, leftover) = Connection::read_proxy_headers(&mut stream)?;
-        let leftover = if parse_proxy {
-            tx.send(Message::Proxy(proxy_addrs))
-                .chain_err(|| "channel closed")?;
-            leftover
-        } else {
-            // If we're not configured to parse PROXY headers, just discard them and any
-            // bytes read while looking for them, to avoid confusing the Electrum request parser.
-            tx.send(Message::Proxy(None))
-                .chain_err(|| "channel closed")?;
-            Vec::new()
-        };
+        tx.send(Message::Proxy(proxy_addrs))
+            .chain_err(|| "channel closed")?;
 
         let mut reader = BufReader::new(Cursor::new(leftover).chain(stream));
         loop {
@@ -935,9 +936,8 @@ impl Connection {
         });
 
         let max_line_size = self.max_line_size;
-        let parse_proxy = self.haproxy_depth > 0;
         let child = spawn_thread("reader", move || {
-            Connection::handle_requests(stream, tx, max_line_size, parse_proxy)
+            Connection::handle_requests(stream, tx, max_line_size)
         });
         if let Err(e) = self.handle_replies(reply_receiver) {
             error!(
