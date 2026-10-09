@@ -142,6 +142,49 @@ impl JsonRpcV2Error {
     }
 }
 
+/// A reserved per-IP slot, released whenever its connection is dropped.
+struct ClientConnection {
+    ip: IpAddr,
+    counts: Arc<Mutex<HashMap<IpAddr, usize>>>,
+}
+
+impl ClientConnection {
+    fn register(
+        counts: Arc<Mutex<HashMap<IpAddr, usize>>>,
+        ip: Option<IpAddr>,
+        limit: usize,
+    ) -> Result<Option<Self>> {
+        let ip = match ip {
+            Some(ip) if limit > 0 => ip,
+            _ => return Ok(None),
+        };
+        {
+            let mut clients = counts.lock().unwrap();
+            let count = clients.entry(ip).or_insert(0);
+            ensure!(
+                *count < limit,
+                "too many connections from client {} ({} max per client)",
+                ip,
+                limit
+            );
+            *count += 1;
+        }
+        Ok(Some(Self { ip, counts }))
+    }
+}
+
+impl Drop for ClientConnection {
+    fn drop(&mut self) {
+        let mut counts = self.counts.lock().unwrap();
+        if let Some(count) = counts.get_mut(&self.ip) {
+            *count -= 1;
+            if *count == 0 {
+                counts.remove(&self.ip);
+            }
+        }
+    }
+}
+
 struct Connection {
     query: Arc<Query>,
     last_header_entry: Option<HeaderEntry>,
@@ -160,7 +203,7 @@ struct Connection {
     proxy_client: Option<SocketAddr>,
     connections_per_client: usize,
     client_counts: Arc<Mutex<HashMap<IpAddr, usize>>>,
-    registered_ip: Option<IpAddr>,
+    client_slot: Option<ClientConnection>,
     #[cfg(feature = "electrum-discovery")]
     discovery: Option<Arc<DiscoveryManager>>,
 }
@@ -180,6 +223,7 @@ impl Connection {
         haproxy_depth: usize,
         connections_per_client: usize,
         client_counts: Arc<Mutex<HashMap<IpAddr, usize>>>,
+        client_slot: Option<ClientConnection>,
         #[cfg(feature = "electrum-discovery")] discovery: Option<Arc<DiscoveryManager>>,
     ) -> Connection {
         Connection {
@@ -200,7 +244,7 @@ impl Connection {
             proxy_client: None,
             connections_per_client,
             client_counts,
-            registered_ip: None,
+            client_slot,
             #[cfg(feature = "electrum-discovery")]
             discovery,
         }
@@ -629,45 +673,20 @@ impl Connection {
     /// `electrum-connections-per-client` limit. Returns an error if the limit has
     /// already been reached, in which case the connection must be closed.
     fn register_client(&mut self) -> Result<()> {
-        if self.connections_per_client == 0 {
-            // Per-client limit disabled.
+        if self.client_slot.is_some() {
+            // Direct TCP connections reserve their slot before spawning a peer.
             return Ok(());
         }
-        let key = match self
+        let key = self
             .proxy_client
             .map(|addr| addr.ip())
-            .or_else(|| self.stream.direct_ip())
-        {
-            Some(key) => key,
-            // No usable client key (e.g. a unix socket with no PROXY header).
-            None => return Ok(()),
-        };
-
-        let mut counts = self.client_counts.lock().unwrap();
-        let count = counts.entry(key).or_insert(0);
-        if *count >= self.connections_per_client {
-            bail!(
-                "too many connections from client {} ({} max per client)",
-                key,
-                self.connections_per_client
-            );
-        }
-        *count += 1;
-        self.registered_ip = Some(key);
+            .or_else(|| self.stream.direct_ip());
+        self.client_slot = ClientConnection::register(
+            Arc::clone(&self.client_counts),
+            key,
+            self.connections_per_client,
+        )?;
         Ok(())
-    }
-
-    /// Releases this connection's slot in the per-client connection counter.
-    fn unregister_client(&mut self) {
-        if let Some(key) = self.registered_ip.take() {
-            let mut counts = self.client_counts.lock().unwrap();
-            if let Some(count) = counts.get_mut(&key) {
-                *count -= 1;
-                if *count == 0 {
-                    counts.remove(&key);
-                }
-            }
-        }
     }
 
     fn handle_replies(&mut self, shutdown: crossbeam_channel::Receiver<()>) -> Result<()> {
@@ -773,11 +792,9 @@ impl Connection {
     /// proxy layer (outermost first), or `None` if no PROXY header was present,
     /// together with any bytes that were read past the header(s) and belong to
     /// the Electrum request stream.
-    fn read_proxy_headers(
-        stream: &mut ConnectionStream,
-    ) -> Result<(Option<Vec<SocketAddr>>, Vec<u8>)> {
-        // Upper bound on how much we are willing to buffer while looking for
-        // PROXY headers, to avoid unbounded memory use from a slow/malicious peer.
+    fn read_proxy_headers(stream: &mut impl Read) -> Result<(Option<Vec<SocketAddr>>, Vec<u8>)> {
+        // Bound the entire header chain, including already consumed headers.
+        // Bounding just `buf` allows an endless sequence of small valid headers.
         const MAX_PROXY_HEADER_SIZE: usize = 4096;
 
         enum Step {
@@ -789,12 +806,21 @@ impl Connection {
         let mut buf: Vec<u8> = Vec::with_capacity(256);
         let mut addrs: Vec<SocketAddr> = Vec::new();
         let mut saw_proxy = false;
+        let mut header_bytes = 0;
         let mut chunk = [0u8; 256];
 
         loop {
             // Parse as many complete, stacked PROXY headers as the buffer allows.
             let need_more = loop {
                 if buf.is_empty() {
+                    break true;
+                }
+                // The v1 parser can classify a fragmented IP address as invalid
+                // rather than incomplete. Wait for CRLF before parsing its fields.
+                if buf.starts_with(b"PROXY ")
+                    && buf.len() < 107
+                    && !buf.windows(2).any(|bytes| bytes == b"\r\n")
+                {
                     break true;
                 }
                 let step = match ppp::HeaderResult::parse(&buf) {
@@ -814,6 +840,12 @@ impl Connection {
                 };
                 match step {
                     Step::Parsed(consumed, src) => {
+                        header_bytes += consumed;
+                        ensure!(
+                            header_bytes <= MAX_PROXY_HEADER_SIZE,
+                            "PROXY protocol headers exceed {} bytes",
+                            MAX_PROXY_HEADER_SIZE
+                        );
                         saw_proxy = true;
                         if let Some(src) = src {
                             addrs.push(src);
@@ -832,7 +864,7 @@ impl Connection {
             if !need_more {
                 break;
             }
-            if buf.len() > MAX_PROXY_HEADER_SIZE {
+            if header_bytes + buf.len() > MAX_PROXY_HEADER_SIZE {
                 bail!(
                     "PROXY protocol header too large (exceeds {} bytes)",
                     MAX_PROXY_HEADER_SIZE
@@ -853,7 +885,7 @@ impl Connection {
     }
 
     fn handle_requests(
-        stream: ConnectionStream,
+        stream: impl Read,
         tx: crossbeam_channel::Sender<Message>,
         max_line_size: usize,
     ) -> Result<()> {
@@ -874,7 +906,12 @@ impl Connection {
         // The parsed addresses are forwarded over the channel; whether they are
         // actually used to identify the client is decided later based on the
         // configured `electrum-haproxy-depth` (a depth of 0 ignores them).
-        let (proxy_addrs, leftover) = Connection::read_proxy_headers(&mut stream)?;
+        let (proxy_addrs, leftover) =
+            Connection::read_proxy_headers(&mut stream).inspect_err(|_| {
+                // Wake the reply worker so rejected headers close the connection now,
+                // instead of retaining its workers until the idle timeout.
+                let _ = tx.send(Message::Done);
+            })?;
         tx.send(Message::Proxy(proxy_addrs))
             .chain_err(|| "channel closed")?;
 
@@ -950,7 +987,6 @@ impl Connection {
         self.stats
             .subscriptions
             .sub(self.status_hashes.len() as i64);
-        self.unregister_client();
 
         let addr = self.client_string();
         debug!("[{}] shutting down connection", addr);
@@ -1186,6 +1222,26 @@ impl RPC {
                         continue;
                     }
 
+                    // Count direct connections before reading any data or spawning
+                    // their workers, so idle clients cannot evade the per-IP cap.
+                    // Proxy clients are counted once their headers identify them.
+                    let client_slot = if haproxy_depth == 0 {
+                        match ClientConnection::register(
+                            Arc::clone(&client_counts),
+                            stream.direct_ip(),
+                            connections_per_client,
+                        ) {
+                            Ok(slot) => slot,
+                            Err(error) => {
+                                info!("[{}] rejecting connection: {}", stream.addr_string(), error);
+                                let _ = stream.shutdown(Shutdown::Both);
+                                continue;
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
                     let addr = stream.addr_string();
                     // explicitely scope the shadowed variables for the new thread
                     let query = Arc::clone(&query);
@@ -1218,6 +1274,7 @@ impl RPC {
                             haproxy_depth,
                             connections_per_client,
                             client_counts,
+                            client_slot,
                             #[cfg(feature = "electrum-discovery")]
                             discovery,
                         );
@@ -1452,5 +1509,168 @@ impl Read for ConnectionStream {
             ConnectionStream::Tcp(s, _) => s.read(buf),
             ConnectionStream::Unix(s, _, _) => s.read(buf),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const REQUEST: &str = "{\"id\":1,\"method\":\"server.ping\",\"params\":[]}\n";
+    const PROXY_V1: &[u8] = b"PROXY TCP4 192.0.2.1 198.51.100.1 1234 50001\r\n";
+
+    fn proxy_v2(size: usize) -> Vec<u8> {
+        // PROXY v2, TCP/IPv4, with an optional payload after the addresses.
+        let mut bytes = b"\r\n\r\n\0\r\nQUIT\n\x21\x11".to_vec();
+        bytes.extend_from_slice(&((size - 16) as u16).to_be_bytes());
+        bytes.extend_from_slice(&[192, 0, 2, 1, 198, 51, 100, 1, 0x04, 0xd2, 0xc3, 0x51]);
+        bytes.resize(size, 0);
+        bytes
+    }
+
+    #[test]
+    fn first_request_survives_plain_and_proxy_connections() {
+        for prefix in [Vec::new(), PROXY_V1.to_vec(), proxy_v2(28)] {
+            let has_proxy = !prefix.is_empty();
+            let mut input = prefix;
+            input.extend_from_slice(REQUEST.as_bytes());
+            let (tx, rx) = crossbeam_channel::unbounded();
+            Connection::handle_requests(Cursor::new(input), tx, 1024).unwrap();
+            match rx.recv().unwrap() {
+                Message::Proxy(addresses) => {
+                    assert_eq!(addresses.is_some(), has_proxy);
+                    if let Some(addresses) = addresses {
+                        assert_eq!(addresses, vec!["192.0.2.1:1234".parse().unwrap()]);
+                    }
+                }
+                other => panic!("expected proxy result, got {:?}", other),
+            }
+            match rx.recv().unwrap() {
+                Message::Request(request) => assert_eq!(request, REQUEST),
+                other => panic!("expected first request, got {:?}", other),
+            }
+            assert!(matches!(rx.recv().unwrap(), Message::Done));
+        }
+    }
+
+    #[test]
+    fn fragmented_stacked_proxy_headers_preserve_request_bytes() {
+        struct Fragmented<R>(R);
+        impl<R: Read> Read for Fragmented<R> {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                let len = buf.len().min(1);
+                self.0.read(&mut buf[..len])
+            }
+        }
+        let mut input = PROXY_V1.to_vec();
+        input.extend_from_slice(b"PROXY TCP6 2001:db8::1 2001:db8::2 4321 50001\r\n");
+        input.extend_from_slice(REQUEST.as_bytes());
+        let mut reader = Fragmented(Cursor::new(input));
+        let (addresses, mut leftover) = Connection::read_proxy_headers(&mut reader).unwrap();
+        reader.read_to_end(&mut leftover).unwrap();
+        assert_eq!(leftover, REQUEST.as_bytes());
+        assert_eq!(
+            addresses.unwrap(),
+            vec![
+                "192.0.2.1:1234".parse().unwrap(),
+                "[2001:db8::1]:4321".parse().unwrap()
+            ]
+        );
+    }
+
+    #[test]
+    fn proxy_header_budget_covers_complete_and_stacked_headers() {
+        let mut maximum = proxy_v2(4096);
+        maximum.extend_from_slice(REQUEST.as_bytes());
+        assert!(Connection::read_proxy_headers(&mut Cursor::new(maximum)).is_ok());
+        for input in [
+            proxy_v2(4097),
+            PROXY_V1.repeat(100),
+            b"PROXY UNKNOWN\r\n".repeat(400),
+        ] {
+            assert!(Connection::read_proxy_headers(&mut Cursor::new(input)).is_err());
+        }
+    }
+
+    #[test]
+    fn oversized_proxy_headers_notify_the_connection_to_close() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        assert!(Connection::handle_requests(Cursor::new(PROXY_V1.repeat(100)), tx, 1024).is_err());
+        assert!(matches!(rx.recv().unwrap(), Message::Done));
+    }
+
+    #[test]
+    fn request_size_limit_includes_bytes_read_during_proxy_detection() {
+        for prefix in [Vec::new(), PROXY_V1.to_vec()] {
+            let mut input = prefix;
+            input.extend_from_slice(REQUEST.as_bytes());
+            let (tx, rx) = crossbeam_channel::unbounded();
+            assert!(
+                Connection::handle_requests(Cursor::new(input), tx, REQUEST.len() - 1).is_err()
+            );
+            assert!(!rx
+                .iter()
+                .any(|message| matches!(message, Message::Request(_))));
+        }
+    }
+
+    #[test]
+    fn per_ip_slots_are_independent_and_released_on_disconnect() {
+        let counts = Arc::new(Mutex::new(HashMap::new()));
+        let ip = Some("192.0.2.1".parse().unwrap());
+        let first = ClientConnection::register(Arc::clone(&counts), ip, 1).unwrap();
+        assert!(ClientConnection::register(Arc::clone(&counts), ip, 1).is_err());
+        let other = ClientConnection::register(
+            Arc::clone(&counts),
+            Some("2001:db8::1".parse().unwrap()),
+            1,
+        )
+        .unwrap();
+        drop(first);
+        let replacement = ClientConnection::register(Arc::clone(&counts), ip, 1).unwrap();
+        drop(replacement);
+        drop(other);
+        assert!(counts.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn disabled_limit_and_unidentified_unix_peers_do_not_reserve_slots() {
+        let counts = Arc::new(Mutex::new(HashMap::new()));
+        assert!(ClientConnection::register(Arc::clone(&counts), None, 1)
+            .unwrap()
+            .is_none());
+        assert!(ClientConnection::register(
+            Arc::clone(&counts),
+            Some("192.0.2.1".parse().unwrap()),
+            0,
+        )
+        .unwrap()
+        .is_none());
+        assert!(counts.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn concurrent_admission_cannot_exceed_per_ip_limit() {
+        let counts = Arc::new(Mutex::new(HashMap::new()));
+        let barrier = Arc::new(std::sync::Barrier::new(16));
+        let workers: Vec<_> = (0..16)
+            .map(|_| {
+                let counts = Arc::clone(&counts);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    let slot =
+                        ClientConnection::register(counts, Some("192.0.2.1".parse().unwrap()), 3);
+                    barrier.wait(); // Keep accepted slots alive until all attempts finish.
+                    slot.is_ok()
+                })
+            })
+            .collect();
+        let accepted = workers
+            .into_iter()
+            .map(|worker| usize::from(worker.join().unwrap()))
+            .sum::<usize>();
+        assert_eq!(accepted, 3);
+        assert!(counts.lock().unwrap().is_empty());
     }
 }

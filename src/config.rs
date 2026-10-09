@@ -298,7 +298,7 @@ impl Config {
             ).arg(
                 Arg::with_name("electrum_haproxy_depth")
                     .long("electrum-haproxy-depth")
-                    .help("Which HAProxy PROXY-protocol header layer identifies the real client IP. 0 disables PROXY-protocol detection; 1 uses the first (outermost) address, 2 the second, and so on. If the requested layer or any PROXY header is absent, no client IP is associated with the connection.")
+                    .help("Which HAProxy PROXY-protocol address identifies the real client IP. 0 ignores reported addresses and uses the TCP peer IP; 1 uses the first address, 2 the second, and so on. Missing addresses fall back to the TCP peer IP. Only enable behind a trusted proxy with direct access to the listener restricted.")
                     .default_value("0")
             ).arg(
                 Arg::with_name("electrum_connections_per_client")
